@@ -1,5 +1,8 @@
 from socket import *
+import PySimpleGUI as sg
 import threading
+
+from utils import removeValues
 
 hostConnect = "localhost"
 portConnect = 5011
@@ -8,6 +11,89 @@ messagePatternConnect = f"{hostConnect}:{portConnect}"
 messagePatternEndConnect = "Conexão encerrada com o servidor!"
 messageStop = "sair"
 optionsClients = []
+
+
+class ChatClient:
+    def __init__(self, client):
+        self.event = ""
+        self.window = ""
+        self.value = ""
+        self.client = client
+
+    def main(self):
+        sg.theme('Reddit')
+
+        layout = [[sg.Text('Saida', size=(5, 1)), sg.Button("Limpar tela", size=(10, 0), button_color=(sg.BLUES[0], "white"))],
+                  [sg.Output(size=(134, 15), font='Helvetica 10', key="output")],
+                  [sg.Button("Mural", size=(10, 2)), sg.Button("BroadCast", size=(10, 2), disabled=True),
+                   sg.Button("MultiCast", size=(10, 2), disabled=True),
+                   sg.Listbox([], size=(20, 2), disabled=True, select_mode=sg.LISTBOX_SELECT_MODE_MULTIPLE, key="listOptions")],
+                  [sg.ML(size=(80, 5), enter_submits=True, key='query', do_not_clear=False, focus=True),
+                   sg.Button("Limpar", size=(10, 2), button_color=("white", sg.BLUES[0])),
+                   sg.Button('Enviar', size=(10, 2), button_color=("white", sg.BLUES[0]), bind_return_key=True)]]
+
+        window = sg.Window('Interface Chat', layout,
+                           default_element_size=(30, 2),
+                           font=('Helvetica', ' 13'),
+                           default_button_element_size=(8, 2),
+                           return_keyboard_events=True, finalize=True, enable_close_attempted_event=True)
+
+        self.window = window
+        communicationType = ""
+
+        thread1 = threading.Thread(target=receiveMessages, args=[self.client, window])
+        thread1.start()
+
+        while True:
+            event, value = window.read()
+
+            if len(optionsClients) > 0:
+                window["MultiCast"].update(disabled=False)
+                window["BroadCast"].update(disabled=False)
+            else:
+                window["MultiCast"].update(disabled=True)
+                window["BroadCast"].update(disabled=True)
+
+            try:
+                if event == "Mural":
+                    communicationType = "mural"
+                    print("Mural Sistema\nDigite uma mensagem:")
+                    window["listOptions"].update(optionsClients, disabled=True)
+                elif event == "BroadCast":
+                    window["listOptions"].update(optionsClients, disabled=True)
+                    communicationType = "broadcast"
+                    print("Broadcast Sistema\nDigite uma mensagem:")
+                elif event == "MultiCast":
+                    communicationType = "multicast"
+                    print("Multicast Sistema\nDigite uma mensagem e selecione os clientes para envio")
+                    window["listOptions"].update(optionsClients, disabled=False)
+                elif event == "Enviar" and communicationType != "":
+                    if len(value["listOptions"]) == 0 and communicationType == "multicast":
+                        print("Selecione pelo menos um cliente para envio")
+                        continue
+                    sendMessages(self.client, communicationType, value["query"],self.window, value["listOptions"])
+                    window["query"].update("")
+                elif event == "Limpar":
+                    window["query"].update("")
+                elif event == "Limpar tela":
+                    window["output"].update("")
+                elif event == sg.WINDOW_CLOSE_ATTEMPTED_EVENT and sg.popup_yes_no('Você quer realmente sair?') == 'Yes':
+                    print(messagePatternEndConnect)
+                    self.client.close()
+                    break
+                elif event == sg.WIN_CLOSED:
+                    print(messagePatternEndConnect)
+                    self.client.close()
+                    break
+
+            except:
+                print("Não foi possivel entender sua escolha")
+
+        window.Close()
+        return
+
+    def runThread(self):
+        threading.Thread(target=self.main).start()
 
 
 def main():
@@ -21,79 +107,25 @@ def main():
 
     print(f"conectado com o servidor: {messagePatternConnect}")
 
-    thread1 = threading.Thread(target=receiveMessages, args=[socketClient])
-    thread1.start()
-    menuOptions(socketClient)
+    ChatClient(socketClient).main()
 
 
-def menuOptions(client: socket):
-    while True:
-        try:
-            options = "\nDigite uma das opções: \n 1 - Enviar somente para o mural \n 2 - Enviar para todos os clientes \n 3 - Enviar para clientes selecionados \n 4 - Sair\n"
+def sendMessages(client: socket, typeAction: str, message: str, window: sg.Window, listClient: None or [] = None):
+    try:
+        client.send(f"{typeAction}:{message}:{listClient}".encode("utf-8"))
 
-            choice = input(options)
-
-            if choice == "1":
-                sendMessages(client, "mural")
-            elif choice == "2":
-                if len(optionsClients) == 0:
-                    print("Não existe cliente para enviar")
-                    continue
-
-                sendMessages(client, "broadcast")
-            elif choice == "3":
-                if len(optionsClients) == 0:
-                    print("Não existe cliente para enviar")
-                    continue
-                sendForSelectedClients(client)
-            elif choice == "4" or choice.lower() == "sair":
-                print(messagePatternEndConnect)
-                client.close()
-                break
-        except:
-            print("Não foi possivel entender sua escolha")
-            continue
-
-
-def sendMessages(client: socket, typeAction: str, listClient: None or [] = None):
-    while True:
-        try:
-            message = input("\nDigite uma mensagem para envio:")
-
-            client.send(f"{typeAction}:{message}:{listClient}".encode("utf-8"))
-
-            if messageStop in message.lower():
-                print(messagePatternEndConnect)
-                client.close()
-                break
-
-            print("Mensagem enviada com sucesso")
-        except:
-            print("Não foi possivel enviar a mensagem")
+        if messageStop in message.lower():
+            print(messagePatternEndConnect)
             client.close()
-            continue
-        finally:
-            choice = comeBack()
+            window.Close()
+            return
 
-            if choice is True:
-                break
-
-
-def sendForSelectedClients(client: socket):
-    listChoice = choiceClients()
-
-    if len(listChoice) == 0:
-        return
-
-    sendMessages(client, "multicast", listChoice)
+        print("Mensagem enviada com sucesso")
+    except:
+        print("Não foi possivel enviar a mensagem")
 
 
-def removeValues(value):
-    if value == "":
-        return False
-    else:
-        return True
-def receiveMessages(client: socket):
+def receiveMessages(client: socket, window: sg.Window):
     while True:
         try:
             message = client.recv(1024).decode("utf-8")
@@ -105,80 +137,34 @@ def receiveMessages(client: socket):
                     try:
                         print(f"Usuário {addressClient} foi removido")
                         optionsClients.remove(addressClient)
+                        if len(optionsClients) == 0:
+                            window["BroadCast"].update(disabled=True)
+                            window["MultiCast"].update(disabled=True)
+                            window["listOptions"].update([], disabled=True)
                     except:
                         print("Não foi possivel remover")
                     continue
 
-            if "saveClient" in message:
+            elif "saveClient" in message:
                 listMessage = filter(removeValues, message.split("-"))
 
                 for messageClient in listMessage:
                     tag, addressClient = messageClient.split(":", 1)
-                    if(addressClient in optionsClients):
+                    if (addressClient in optionsClients):
                         continue
+                    print(f"Usuario {addressClient} online")
                     optionsClients.append(addressClient)
+
+                window["BroadCast"].update(disabled=False)
+                window["MultiCast"].update(disabled=False)
+                window["listOptions"].update([optionsClients])
                 continue
 
-            print(f"\n{message}")
+            print(f"{message}")
 
         except:
             client.close()
             break
-
-def mapOptions(option):
-    host, port = option
-    return f"{port}: {option}\n"
-
-
-def comeBack():
-    while True:
-        try:
-            choice = input("\nDeseja continuar?\n1 - sim\n2 - não\n")
-
-            if choice == "1" or choice.lower() == "sim":
-                return False
-            elif choice == "2" or choice.lower() == "não":
-                return True
-
-            raise Exception
-
-        except:
-            print("Não entendemos sua escolha, digite novamente!")
-            continue
-
-
-def choiceClients():
-    listClientsChoice = []
-    cloneOptionsClients = optionsClients.copy()
-
-    while True:
-        try:
-            removeClient = ""
-            if len(cloneOptionsClients) == 0:
-                print("Não existe mais opções para escolher")
-                return listClientsChoice
-
-            choice = input(f"Digite a porta da tua escolha:\n{cloneOptionsClients}\n")
-
-            for option in cloneOptionsClients:
-                if choice in option:
-                    print("cliente adicionado na lista")
-                    listClientsChoice.append(option)
-                    removeClient = option
-
-            if removeClient:
-                cloneOptionsClients.remove(removeClient)
-            else:
-                raise Exception
-
-            if comeBack() is True:
-                return listClientsChoice
-        except:
-            print("Essa porta não existe nas opções")
-            if comeBack() is True:
-                return listClientsChoice
-            continue
-
 
 
 main()

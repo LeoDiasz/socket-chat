@@ -5,7 +5,6 @@ serverPort = 5011
 serverHost = "localhost"
 
 clients = []
-
 messageStop = "sair"
 
 
